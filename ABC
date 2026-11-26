@@ -1,0 +1,2583 @@
+-- Exploit Hub — 100 commands, draggable GUI, minimize + remove
+-- Self-contained executor script. Paste into any Lua executor.
+
+local G = (type(getgenv) == "function" and getgenv()) or _G
+print("[PYREX] loading")
+
+if G.HUB_GUI then
+	pcall(function() G.HUB_GUI:Destroy() end)
+	G.HUB_GUI = nil
+end
+if G.HUB_STATE and type(G.HUB_STATE.cleanup) == "function" then
+	pcall(G.HUB_STATE.cleanup)
+end
+
+local state = {
+	connections = {},
+	espObjects = {},
+	nameObjects = {},
+	tracerObjects = {},
+	zombies = {},
+	burning = {},
+	frozen = {},
+	godAll = {},
+	invisAll = {},
+	noclipAll = {},
+	invisAllActive = false,
+	noclipAllActive = false,
+	originals = {},
+	fly = false,
+	noclip = false,
+	god = false,
+	invisible = false,
+	blind = false,
+	xray = false,
+	fullbright = false,
+	forcefield = false,
+	cleanedUp = false,
+	infiniteJump = false,
+	autoJump = false,
+	autoWalk = false,
+	spin = false,
+	levitate = false,
+	clickTp = false,
+	clickDelete = false,
+	aimbot = false,
+	aimlock = false,
+	silentAim = false,
+	silentHookReady = false,
+	crosshair = false,
+	esp = false,
+	nameEsp = false,
+	tracer = false,
+	espColor = Color3.new(0, 1, 0),
+	flySpeed = 60,
+	spinSpeed = 5,
+}
+G.HUB_STATE = state
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local TPS = game:GetService("TeleportService")
+local TS = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = workspace.CurrentCamera
+if not Camera then
+	Camera = Instance.new("Camera")
+	Camera.Name = "PYREX_CAMERA_FALLBACK"
+	Camera.Parent = workspace
+end
+local function cam()
+	return workspace.CurrentCamera or Camera
+end
+
+local char, humanoid, root
+local statusLabel, input
+local blindGui, crossGui
+
+local function captureOriginals()
+	if humanoid then
+		state.originals.walkSpeed = state.originals.walkSpeed or humanoid.WalkSpeed
+		state.originals.jumpPower = state.originals.jumpPower or humanoid.JumpPower
+		state.originals.jumpHeight = state.originals.jumpHeight or humanoid.JumpHeight
+		if state.originals.useJumpPower == nil then state.originals.useJumpPower = humanoid.UseJumpPower end
+		state.originals.hipHeight = state.originals.hipHeight or humanoid.HipHeight
+		state.originals.maxHealth = state.originals.maxHealth or humanoid.MaxHealth
+	end
+	state.originals.gravity = state.originals.gravity or workspace.Gravity
+	state.originals.brightness = state.originals.brightness or Lighting.Brightness
+	state.originals.ambient = state.originals.ambient or Lighting.Ambient
+	state.originals.fogEnd = state.originals.fogEnd or Lighting.FogEnd
+	state.originals.fogStart = state.originals.fogStart or Lighting.FogStart
+	state.originals.clockTime = state.originals.clockTime or Lighting.ClockTime
+	if state.originals.outlines == nil then state.originals.outlines = Lighting.Outlines end
+	state.originals.cameraFov = state.originals.cameraFov or cam().FieldOfView
+	state.originals.camMin = state.originals.camMin or LocalPlayer.CameraMinZoomDistance
+	state.originals.camMax = state.originals.camMax or LocalPlayer.CameraMaxZoomDistance
+end
+
+local function refreshChar()
+	char = LocalPlayer.Character
+	humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	root = char and char:FindFirstChild("HumanoidRootPart")
+	captureOriginals()
+end
+refreshChar()
+
+local function connect(signal, fn)
+	local conn = signal:Connect(fn)
+	table.insert(state.connections, conn)
+	return conn
+end
+
+local function setStatus(msg)
+	if statusLabel and statusLabel.Parent then
+		local text = "> " .. tostring(msg)
+		statusLabel.Text = text
+		task.spawn(function()
+			task.wait(2)
+			if statusLabel and statusLabel.Parent and statusLabel.Text == text then
+				statusLabel.Text = ""
+			end
+		end)
+	else
+		print("[Hub] " .. tostring(msg))
+	end
+end
+
+local colors = {
+	red = Color3.new(1, 0, 0),
+	green = Color3.new(0, 1, 0),
+	blue = Color3.new(0, 0, 1),
+	yellow = Color3.new(1, 1, 0),
+	purple = Color3.new(0.5, 0, 1),
+	cyan = Color3.new(0, 1, 1),
+	white = Color3.new(1, 1, 1),
+	black = Color3.new(0, 0, 0),
+	orange = Color3.new(1, 0.5, 0),
+	pink = Color3.new(1, 0.5, 0.7),
+	lime = Color3.new(0.5, 1, 0),
+}
+
+local function getColor(name)
+	return colors[string.lower(name or "green")] or colors.green
+end
+
+local function getPlayer(arg, allowSelf)
+	if allowSelf == false and (not arg or arg == "" or arg == "me") then return nil end
+	if not arg or arg == "" or arg == "me" then return LocalPlayer end
+	local lower = string.lower(arg)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if string.lower(p.Name) == lower then return p end
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if string.sub(string.lower(p.Name), 1, #lower) == lower then return p end
+	end
+	return nil
+end
+
+local function getRoot(p)
+	if not p or not p.Character then return nil end
+	return p.Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHum(p)
+	if not p or not p.Character then return nil end
+	return p.Character:FindFirstChildOfClass("Humanoid")
+end
+
+local function isOwnCharacter(part)
+	local own = LocalPlayer and LocalPlayer.Character
+	return own ~= nil and part ~= nil and part:IsDescendantOf(own)
+end
+
+local function validNum(value, fallback, minValue, maxValue)
+	local n = tonumber(value)
+	if not n or n ~= n or n == math.huge or n == -math.huge then n = fallback end
+	if minValue and n < minValue then n = minValue end
+	if maxValue and n > maxValue then n = maxValue end
+	return n
+end
+
+local function nearestPlayer()
+	local best, bestDist = nil, math.huge
+	local camPos = cam().CFrame.Position
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local r = getRoot(p)
+			if r then
+				local d = (r.Position - camPos).Magnitude
+				if d < bestDist then bestDist, best = d, p end
+			end
+		end
+	end
+	return best
+end
+
+local function zeroRootVelocity()
+	if not root then return end
+	pcall(function()
+		if root.AssemblyLinearVelocity then
+			root.AssemblyLinearVelocity = Vector3.zero
+		else
+			root.Velocity = Vector3.zero
+		end
+	end)
+end
+
+local silentMouse = nil
+pcall(function() silentMouse = LocalPlayer:GetMouse() end)
+local function silentAimRedirect()
+	local s = G.HUB_STATE
+	if not s or not s.silentAim then return nil end
+	local p = nearestPlayer()
+	local ch = p and p.Character
+	if not ch then return nil end
+	return ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChildWhichIsA("BasePart")
+end
+if type(hookfunction) == "function" and silentMouse and not G.PYREX_SILENT_HOOK_READY then
+	pcall(function()
+		local original = silentMouse.GetTarget
+		if type(original) ~= "function" then return end
+		hookfunction(original, function(...)
+			local redirected = silentAimRedirect()
+			if redirected then return redirected end
+			return original(...)
+		end)
+		G.PYREX_SILENT_HOOK_READY = true
+	end)
+end
+state.silentHookReady = G.PYREX_SILENT_HOOK_READY == true
+
+local function clearFlyBody()
+	refreshChar()
+	if root then
+		for _, obj in ipairs(root:GetChildren()) do
+			if obj.Name == "PYREX_FLY" or obj.Name == "PYREX_FLY_GYRO" or obj.Name == "PYREX_FLY_ATT" then
+				pcall(function() obj:Destroy() end)
+			end
+		end
+	end
+	if state.flyBV then pcall(function() state.flyBV:Destroy() end) end
+	if state.flyGyro then pcall(function() state.flyGyro:Destroy() end) end
+	state.flyBV = nil
+	state.flyGyro = nil
+end
+
+local function clearLevBody()
+	refreshChar()
+	if root then
+		for _, obj in ipairs(root:GetChildren()) do
+			if obj.Name == "PYREX_LEVITATE" or obj.Name == "PYREX_LEVITATE_ATT" then
+				pcall(function() obj:Destroy() end)
+			end
+		end
+	elseif state.levBV then
+		pcall(function() state.levBV:Destroy() end)
+	end
+	state.levBV = nil
+end
+
+local function setFlyStatesEnabled(enabled)
+	refreshChar()
+	if not humanoid then return end
+	pcall(function()
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Falling, enabled)
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, enabled)
+	end)
+end
+
+local function flyBody()
+	refreshChar()
+	if not root then return nil, nil end
+	local bv = state.flyBV
+	if not bv or not bv:IsA("BodyVelocity") or bv.Parent ~= root then
+		if bv then pcall(function() bv:Destroy() end) end
+		bv = Instance.new("BodyVelocity")
+		bv.Name = "PYREX_FLY"
+		pcall(function()
+			bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+			bv.Velocity = Vector3.new(0, 0, 0)
+		end)
+		bv.Parent = root
+		state.flyBV = bv
+	end
+
+	local gyro = state.flyGyro
+	if not gyro or not gyro:IsA("BodyGyro") or gyro.Parent ~= root then
+		if gyro then pcall(function() gyro:Destroy() end) end
+		gyro = Instance.new("BodyGyro")
+		gyro.Name = "PYREX_FLY_GYRO"
+		pcall(function()
+			gyro.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+			gyro.P = 8000
+			gyro.D = 500
+			gyro.CFrame = root.CFrame
+		end)
+		gyro.Parent = root
+		state.flyGyro = gyro
+	end
+	return bv, gyro
+end
+
+local function setFly(on)
+	state.fly = on
+	refreshChar()
+	if on then
+		if not root or not humanoid then
+			state.fly = false
+			setStatus("No character")
+			return false
+		end
+		if state.levitate then
+			state.levitate = false
+			clearLevBody()
+		end
+		clearFlyBody()
+		local bv, gyro = flyBody()
+		if not bv or not gyro then
+			state.fly = false
+			clearFlyBody()
+			setStatus("No character")
+			return false
+		end
+		pcall(function()
+			humanoid.PlatformStand = true
+			gyro.CFrame = root.CFrame
+		end)
+	else
+		clearFlyBody()
+		if humanoid then pcall(function() humanoid.PlatformStand = false end) end
+		setFlyStatesEnabled(true)
+	end
+	return true
+end
+
+local function levBody()
+	refreshChar()
+	if not root then return nil end
+	local lv = state.levBV
+	if not lv or not lv:IsA("LinearVelocity") or lv.Parent ~= root then
+		clearLevBody()
+		local att = root:FindFirstChild("PYREX_LEVITATE_ATT")
+		if not att or not att:IsA("Attachment") then
+			if att then pcall(function() att:Destroy() end) end
+			att = Instance.new("Attachment")
+			att.Name = "PYREX_LEVITATE_ATT"
+			att.Parent = root
+		end
+		lv = Instance.new("LinearVelocity")
+		lv.Name = "PYREX_LEVITATE"
+		pcall(function()
+			lv.Attachment0 = att
+			if Enum.ActuatorRelativeTo then lv.RelativeTo = Enum.ActuatorRelativeTo.World end
+			lv.Velocity = Vector3.new(0, 60, 0)
+			lv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+		end)
+		lv.Parent = root
+		state.levBV = lv
+	end
+	return lv
+end
+
+local function setLevitate(on)
+	state.levitate = on
+	refreshChar()
+	if on then
+		if not root or not humanoid then
+			state.levitate = false
+			setStatus("No character")
+			return false
+		end
+		if state.fly then
+			state.fly = false
+			clearFlyBody()
+			setFlyStatesEnabled(true)
+		end
+		local bv = levBody()
+		if not bv then
+			state.levitate = false
+			setStatus("No character")
+			return false
+		end
+		pcall(function() bv.Velocity = Vector3.new(0, 60, 0) end)
+	else
+		clearLevBody()
+	end
+	return true
+end
+
+local function setNoclip(on)
+	state.noclip = on
+	refreshChar()
+	if on then
+		state.savedCollide = state.savedCollide or {}
+		if char then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					state.savedCollide[part] = part.CanCollide
+					part.CanCollide = false
+				end
+			end
+		end
+	elseif state.savedCollide then
+		for part, val in pairs(state.savedCollide) do
+			if part.Parent then part.CanCollide = val end
+		end
+		state.savedCollide = nil
+	end
+end
+
+local function setGod(on)
+	state.god = on
+	refreshChar()
+	if on then
+		if humanoid then
+			state.originals.maxHealth = state.originals.maxHealth or humanoid.MaxHealth
+			humanoid.MaxHealth = 100000
+			humanoid.Health = 100000
+		end
+	elseif humanoid and state.originals.maxHealth then
+		humanoid.MaxHealth = state.originals.maxHealth
+		humanoid.Health = math.min(humanoid.Health, humanoid.MaxHealth)
+	end
+end
+
+local function setInvisible(on)
+	state.invisible = on
+	refreshChar()
+	if on then
+		state.savedTrans = state.savedTrans or {}
+		if char then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					state.savedTrans[part] = part.Transparency
+					part.Transparency = 1
+				end
+			end
+		end
+	elseif state.savedTrans then
+		for part, val in pairs(state.savedTrans) do
+			if part.Parent then pcall(function() part.Transparency = val end) end
+		end
+		state.savedTrans = nil
+	end
+end
+
+local function setBlind(on)
+	state.blind = on
+	if blindGui then blindGui:Destroy(); blindGui = nil end
+	if on then
+		blindGui = Instance.new("ScreenGui")
+		blindGui.Name = "PYREX_BLIND"
+		blindGui.ResetOnSpawn = false
+		blindGui.DisplayOrder = 5
+		local frame = Instance.new("Frame", blindGui)
+		frame.Size = UDim2.new(1, 0, 1, 0)
+		frame.BackgroundColor3 = Color3.new(0, 0, 0)
+		frame.BorderSizePixel = 0
+		blindGui.Parent = playerGui
+	end
+end
+
+local function setCrosshair(on, color)
+	state.crosshair = on
+	if crossGui then crossGui:Destroy(); crossGui = nil end
+	if on then
+		crossGui = Instance.new("ScreenGui")
+		crossGui.Name = "PYREX_CROSSHAIR"
+		crossGui.ResetOnSpawn = false
+		crossGui.DisplayOrder = 10
+		local label = Instance.new("TextLabel", crossGui)
+		label.Size = UDim2.new(0, 24, 0, 24)
+		label.Position = UDim2.new(0.5, -12, 0.5, -12)
+		label.Text = "+"
+		label.TextColor3 = color or state.espColor
+		label.BackgroundTransparency = 1
+		label.TextScaled = true
+		label.Font = Enum.Font.Code
+		label.TextXAlignment = Enum.TextXAlignment.Center
+		label.TextYAlignment = Enum.TextYAlignment.Center
+		crossGui.Parent = playerGui
+	end
+end
+
+local function setXray(on)
+	state.xray = on
+	if on then
+		state.savedPartTrans = {}
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if obj:IsA("BasePart") and not isOwnCharacter(obj) then
+				state.savedPartTrans[obj] = obj.Transparency
+				obj.Transparency = 0.7
+			end
+		end
+	elseif state.savedPartTrans then
+		for part, val in pairs(state.savedPartTrans) do
+			if part.Parent then part.Transparency = val end
+		end
+		state.savedPartTrans = nil
+	end
+end
+
+local function setFullbright(on)
+	state.fullbright = on
+	if on then
+		state.originals.brightness = state.originals.brightness or Lighting.Brightness
+		state.originals.ambient = state.originals.ambient or Lighting.Ambient
+		Lighting.Brightness = 2
+		Lighting.Ambient = Color3.new(1, 1, 1)
+		Lighting.Outlines = false
+	else
+		Lighting.Brightness = state.originals.brightness or 1
+		Lighting.Ambient = state.originals.ambient or Color3.new(0.5, 0.5, 0.5)
+		if state.originals.outlines ~= nil then Lighting.Outlines = state.originals.outlines end
+	end
+end
+
+local function setFrozen(p, on)
+	local h, r = getHum(p), getRoot(p)
+	if not h or not r then return end
+	if on then
+		if not state.frozen[p] then
+			state.frozen[p] = {
+				char = p.Character,
+				walk = h.WalkSpeed,
+				jump = h.JumpPower,
+				height = h.JumpHeight,
+				useJumpPower = h.UseJumpPower,
+				anchored = r.Anchored,
+			}
+			h.WalkSpeed = 0
+			h.JumpPower = 0
+			h.JumpHeight = 0
+			r.Anchored = true
+		end
+	else
+		local orig = state.frozen[p]
+		if orig and orig.char == p.Character then
+			h.WalkSpeed = orig.walk
+			h.JumpPower = orig.jump
+			h.JumpHeight = orig.height
+			h.UseJumpPower = orig.useJumpPower
+			r.Anchored = orig.anchored
+			state.frozen[p] = nil
+		elseif orig then
+			state.frozen[p] = nil
+		end
+	end
+end
+
+local function clearFrozen()
+	local list = {}
+	for p in pairs(state.frozen) do table.insert(list, p) end
+	for _, p in ipairs(list) do setFrozen(p, false) end
+end
+
+local function toggleForcefield(on)
+	state.forcefield = on
+	refreshChar()
+	if not root then return end
+	if on then
+		if not root:FindFirstChildOfClass("ForceField") then
+			Instance.new("ForceField", root).Visible = true
+		end
+	else
+		local ff = root:FindFirstChildOfClass("ForceField")
+		if ff then pcall(function() ff:Destroy() end) end
+	end
+end
+
+if not state.espFolder then
+	state.espFolder = Instance.new("Folder", playerGui)
+	state.espFolder.Name = "VisualObjects"
+end
+
+local function ensureFolder()
+	if not state.espFolder or not state.espFolder.Parent then
+		state.espFolder = Instance.new("Folder", playerGui)
+		state.espFolder.Name = "VisualObjects"
+	end
+end
+
+local function clearESP()
+	for _, obj in pairs(state.espObjects) do
+		if obj.Parent then obj:Destroy() end
+	end
+	state.espObjects = {}
+end
+
+local function refreshESP()
+	clearESP()
+	if not state.esp then return end
+	ensureFolder()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character then
+			local hl = Instance.new("Highlight")
+			hl.Adornee = p.Character
+			hl.FillColor = state.espColor
+			hl.FillTransparency = 0.6
+			hl.OutlineColor = state.espColor
+			hl.OutlineTransparency = 0
+			hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			hl.Parent = state.espFolder
+			table.insert(state.espObjects, hl)
+		end
+	end
+end
+
+local function clearNameESP()
+	for _, obj in pairs(state.nameObjects) do
+		if obj.Parent then obj:Destroy() end
+	end
+	state.nameObjects = {}
+end
+
+local function refreshNameESP()
+	clearNameESP()
+	if not state.nameEsp then return end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character then
+			local head = p.Character:FindFirstChild("Head")
+			if head then
+				local bg = Instance.new("BillboardGui")
+				bg.Name = "NameTag"
+				bg.Adornee = head
+				bg.Size = UDim2.new(0, 220, 0, 34)
+				bg.StudsOffset = Vector3.new(0, 2.2, 0)
+				bg.AlwaysOnTop = true
+				local label = Instance.new("TextLabel", bg)
+				label.Size = UDim2.new(1, 0, 1, 0)
+				label.Text = p.Name
+				label.TextColor3 = state.espColor
+				label.BackgroundTransparency = 1
+				label.TextScaled = true
+				label.Font = Enum.Font.Code
+				bg.Parent = head
+				table.insert(state.nameObjects, bg)
+			end
+		end
+	end
+end
+
+local function clearTracers()
+	for _, obj in pairs(state.tracerObjects) do
+		if obj.Parent then obj:Destroy() end
+	end
+	state.tracerObjects = {}
+end
+
+local function refreshTracers()
+	clearTracers()
+	if not state.tracer or not root then return end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local r = getRoot(p)
+			if r then
+				local a0 = Instance.new("Attachment", root)
+				local a1 = Instance.new("Attachment", r)
+				local beam = Instance.new("Beam", root)
+				beam.Attachment0 = a0
+				beam.Attachment1 = a1
+				beam.Color = ColorSequence.new(state.espColor)
+				beam.Width0 = 2
+				beam.Width1 = 2
+				beam.FaceCamera = true
+				table.insert(state.tracerObjects, a0)
+				table.insert(state.tracerObjects, a1)
+				table.insert(state.tracerObjects, beam)
+			end
+		end
+	end
+end
+
+local function applyPlayerWideStates()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			if state.godAllActive then
+				local h = getHum(p)
+				if h then
+					if not state.godAll[p] then state.godAll[p] = h.MaxHealth end
+					h.MaxHealth = 100000
+					h.Health = 100000
+				end
+			end
+			if state.invisAllActive and p.Character and not state.invisAll[p] then
+				local orig = {}
+				for _, part in ipairs(p.Character:GetDescendants()) do
+					if part:IsA("BasePart") then
+						orig[part] = part.Transparency
+						part.Transparency = 1
+					end
+				end
+				state.invisAll[p] = orig
+			end
+			if state.noclipAllActive and p.Character and not state.noclipAll[p] then
+				local orig = {}
+				for _, part in ipairs(p.Character:GetDescendants()) do
+					if part:IsA("BasePart") then
+						orig[part] = part.CanCollide
+						part.CanCollide = false
+					end
+				end
+				state.noclipAll[p] = orig
+			end
+		end
+	end
+end
+
+local function applyStates()
+	refreshChar()
+	clearFrozen()
+	state.frozen = {}
+	if state.forcefield then toggleForcefield(true) end
+	if state.fly then setFly(false); setFly(true) end
+	if state.levitate then setLevitate(false); setLevitate(true) end
+	if state.noclip then setNoclip(false); setNoclip(true) end
+	if state.god then setGod(false); setGod(true) end
+	if state.invisible then setInvisible(false); setInvisible(true) end
+	applyPlayerWideStates()
+	refreshESP()
+	refreshNameESP()
+	refreshTracers()
+end
+
+connect(LocalPlayer.CharacterAdded, function(character)
+	task.spawn(function()
+		pcall(function()
+			character:WaitForChild("HumanoidRootPart", 5)
+			character:WaitForChild("Humanoid", 5)
+		end)
+		refreshChar()
+		applyStates()
+	end)
+end)
+
+local watchedPlayers = {}
+local function watchPlayer(p)
+	if not p or p == LocalPlayer or watchedPlayers[p] then return end
+	watchedPlayers[p] = true
+	connect(p.CharacterAdded, function()
+		state.frozen[p] = nil
+		state.invisAll[p] = nil
+		state.noclipAll[p] = nil
+		state.godAll[p] = nil
+		applyPlayerWideStates()
+		if state.esp then refreshESP() end
+		if state.nameEsp then refreshNameESP() end
+		if state.tracer then refreshTracers() end
+	end)
+end
+
+connect(Players.PlayerAdded, function(p)
+	watchPlayer(p)
+	if state.esp then refreshESP() end
+	if state.nameEsp then refreshNameESP() end
+	if state.tracer then refreshTracers() end
+end)
+for _, p in ipairs(Players:GetPlayers()) do watchPlayer(p) end
+
+connect(Players.PlayerRemoving, function(p)
+	watchedPlayers[p] = nil
+	state.burning[p] = nil
+	state.zombies[p] = nil
+	state.frozen[p] = nil
+	state.godAll[p] = nil
+	state.invisAll[p] = nil
+	state.noclipAll[p] = nil
+	if state.esp then refreshESP() end
+	if state.nameEsp then refreshNameESP() end
+	if state.tracer then refreshTracers() end
+end)
+
+connect(UIS.JumpRequest, function()
+	if state.fly or state.levitate then return end
+	if state.infiniteJump and humanoid then
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
+
+connect(RS.Heartbeat, function(dt)
+	dt = validNum(dt, 1 / 60, 0, 0.1)
+	local currentChar = LocalPlayer.Character
+	if state.fly then
+		refreshChar()
+		local bv, gyro = flyBody()
+		if bv and gyro and root and root.Parent then
+			local cf = cam().CFrame
+			local dir = Vector3.new(0, 0, 0)
+			if UIS:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
+			if UIS:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
+			if UIS:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
+			if UIS:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
+			if UIS:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+			if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.Q) then dir = dir - Vector3.new(0, 1, 0) end
+			if dir.Magnitude > 0 then dir = dir.Unit end
+			local speed = validNum(state.flySpeed, 60, 10, 300)
+			if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then speed = speed * 3 end
+			local target = dir * speed
+			local alpha = 1 - math.exp(-dt * 14)
+			pcall(function()
+				bv.Velocity = bv.Velocity:Lerp(target, alpha)
+				gyro.CFrame = cf
+			end)
+		end
+	end
+	if state.levitate then
+		local bv = levBody()
+		if bv then pcall(function() bv.Velocity = Vector3.new(0, 60, 0) end) end
+	end
+	if state.noclip and currentChar then
+		for _, part in ipairs(currentChar:GetDescendants()) do
+			if part:IsA("BasePart") then
+				if state.savedCollide and state.savedCollide[part] == nil then
+					state.savedCollide[part] = part.CanCollide
+				end
+				part.CanCollide = false
+			end
+		end
+	end
+	if state.god and humanoid and humanoid.Health < humanoid.MaxHealth then
+		humanoid.Health = humanoid.MaxHealth
+	end
+	if state.godAllActive then
+		for p in pairs(state.godAll) do
+			local h = getHum(p)
+			if h and h.Health < h.MaxHealth then h.Health = h.MaxHealth end
+		end
+	end
+	if state.spin and root then
+		root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(validNum(state.spinSpeed, 5, -360, 360)) * dt, 0)
+	end
+	if state.autoJump and humanoid then
+		local t = os.clock()
+		if t - (state.lastAutoJump or 0) > 0.4 then
+			state.lastAutoJump = t
+			humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end
+	if state.autoWalk and humanoid then
+		humanoid:Move(cam().CFrame.LookVector, false)
+	end
+	if next(state.burning) then
+		local t = os.clock()
+		if t - (state.lastBurn or 0) > 0.5 then
+			state.lastBurn = t
+			for p in pairs(state.burning) do
+				local h = getHum(p)
+				if h then h:TakeDamage(5) end
+			end
+		end
+	end
+	for p in pairs(state.zombies) do
+		local h, r = getHum(p), getRoot(p)
+		local target = getRoot(LocalPlayer)
+		if h and r and target then
+			local delta = target.Position - r.Position
+			if delta.Magnitude > 0.001 then h:Move(delta.Unit, false) end
+		end
+	end
+end)
+
+connect(RS.RenderStepped, function()
+	local currentCamera = cam()
+	if state.aimbot and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+		local p = nearestPlayer()
+		local r = p and getRoot(p)
+		if r then currentCamera.CFrame = CFrame.lookAt(currentCamera.CFrame.Position, r.Position) end
+	end
+	if state.aimlock then
+		local p = nearestPlayer()
+		local r = p and getRoot(p)
+		if r then currentCamera.CFrame = CFrame.lookAt(currentCamera.CFrame.Position, r.Position) end
+	end
+end)
+
+connect(UIS.InputBegan, function(input, gpe)
+	if gpe then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local currentCamera = cam()
+		if state.clickTp or state.clickDelete then
+			local ray = currentCamera:ScreenPointToRay(input.Position.X, input.Position.Y)
+			local params = RaycastParams.new()
+			params.FilterType = Enum.RaycastFilterType.RejectList
+			params.FilterDescendantsInstances = { LocalPlayer.Character }
+			local hit = workspace:Raycast(ray.Origin, ray.Direction * 500, params)
+			if hit then
+				if state.clickTp and root then
+					root.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+				end
+				if state.clickDelete then
+					pcall(function() hit.Instance:Destroy() end)
+				end
+			end
+		end
+	end
+end)
+
+local function resetAll()
+	refreshChar()
+	toggleForcefield(false)
+	setFlyStatesEnabled(true)
+	setFly(false)
+	setLevitate(false)
+	setNoclip(false)
+	setGod(false)
+	setInvisible(false)
+	setBlind(false)
+	setXray(false)
+	setFullbright(false)
+	setCrosshair(false)
+	state.esp = false
+	refreshESP()
+	state.nameEsp = false
+	refreshNameESP()
+	state.tracer = false
+	refreshTracers()
+	state.aimbot = false
+	state.aimlock = false
+	state.silentAim = false
+	state.clickTp = false
+	state.clickDelete = false
+	state.infiniteJump = false
+	state.autoJump = false
+	state.autoWalk = false
+	state.spin = false
+	state.godAllActive = false
+	state.invisAllActive = false
+	state.noclipAllActive = false
+	state.zombies = {}
+	state.burning = {}
+	clearFrozen()
+	for p, orig in pairs(state.godAll) do
+		local h = getHum(p)
+		if h then h.MaxHealth = orig; h.Health = math.min(h.Health, orig) end
+	end
+	state.godAll = {}
+	for p, orig in pairs(state.invisAll) do
+		local c = p.Character
+		if c then
+			for _, part in ipairs(c:GetDescendants()) do
+				if part:IsA("BasePart") and orig[part] then part.Transparency = orig[part] end
+			end
+		end
+	end
+	state.invisAll = {}
+	for p, orig in pairs(state.noclipAll) do
+		local c = p.Character
+		if c then
+			for _, part in ipairs(c:GetDescendants()) do
+				if part:IsA("BasePart") and orig[part] then part.CanCollide = orig[part] end
+			end
+		end
+	end
+	state.noclipAll = {}
+	workspace.Gravity = state.originals.gravity or 196.2
+	Lighting.Brightness = state.originals.brightness or 1
+	Lighting.Ambient = state.originals.ambient or Color3.new(0.5, 0.5, 0.5)
+	Lighting.FogEnd = state.originals.fogEnd or 100000
+	Lighting.FogStart = state.originals.fogStart or 0
+	Lighting.ClockTime = state.originals.clockTime or 12
+	if state.originals.outlines ~= nil then Lighting.Outlines = state.originals.outlines end
+	cam().FieldOfView = state.originals.cameraFov or 70
+	LocalPlayer.CameraMinZoomDistance = state.originals.camMin or 0.5
+	LocalPlayer.CameraMaxZoomDistance = state.originals.camMax or 128
+	LocalPlayer.CameraMode = Enum.CameraMode.Classic
+	if humanoid then
+		humanoid.WalkSpeed = state.originals.walkSpeed or 16
+		humanoid.JumpPower = state.originals.jumpPower or 50
+		humanoid.JumpHeight = state.originals.jumpHeight or 7.2
+		humanoid.UseJumpPower = state.originals.useJumpPower
+		humanoid.HipHeight = state.originals.hipHeight or 2
+		humanoid.MaxHealth = state.originals.maxHealth or 100
+	end
+	setStatus("All states reset")
+end
+
+local cleanup
+cleanup = function()
+	if state.cleanedUp then return end
+	state.cleanedUp = true
+	for _, conn in ipairs(state.connections) do
+		pcall(function() conn:Disconnect() end)
+	end
+	state.connections = {}
+	resetAll()
+	clearESP()
+	clearNameESP()
+	clearTracers()
+	if state.espFolder then state.espFolder:Destroy(); state.espFolder = nil end
+	if blindGui then blindGui:Destroy(); blindGui = nil end
+	if crossGui then crossGui:Destroy(); crossGui = nil end
+	if G.HUB_GUI then G.HUB_GUI:Destroy(); G.HUB_GUI = nil end
+	statusLabel = nil
+	input = nil
+	blindGui = nil
+	crossGui = nil
+	G.HUB_STATE = nil
+end
+state.cleanup = cleanup
+
+local commands = {}
+local commandOrder = {}
+
+local function addCommand(name, desc, fn)
+	if commands[name] then
+		warn("[PYREX] duplicate command: " .. tostring(name))
+		return
+	end
+	commands[name] = { desc = desc, fn = fn }
+	table.insert(commandOrder, { name = name, desc = desc })
+end
+
+addCommand("cmds", "list all commands", function()
+	local names = {}
+	for _, e in ipairs(commandOrder) do table.insert(names, "/" .. e.name) end
+	print("[PYREX] " .. table.concat(names, " "))
+	setStatus(#commandOrder .. " commands — printed to console")
+end)
+addCommand("help", "show help", function()
+	print("[PYREX] Type /cmds for the full list. Example: /fly, /speed 100, /goto username")
+	setStatus("Help printed to console")
+end)
+addCommand("clear", "clear input", function()
+	if input then input.Text = "" end
+end)
+addCommand("remove", "remove gui and cleanup", function()
+	task.defer(cleanup)
+	return "Removing PYREX"
+end)
+addCommand("rejoin", "rejoin current server", function()
+	TPS:Teleport(game.PlaceId, LocalPlayer)
+end)
+addCommand("fly", "toggle flight", function()
+	setFly(not state.fly)
+	setStatus("Fly " .. (state.fly and "on" or "off"))
+end)
+addCommand("unfly", "disable flight", function()
+	setFly(false)
+	setStatus("Fly off")
+end)
+addCommand("speed", "set walk speed", function(args)
+	refreshChar()
+	local n = validNum(args[1], 16, 1, 1000)
+	if humanoid then humanoid.WalkSpeed = n end
+	setStatus("Speed " .. n)
+end)
+addCommand("jump", "set jump power", function(args)
+	refreshChar()
+	local n = validNum(args[1], 50, 0, 1000)
+	if humanoid then
+		humanoid.UseJumpPower = true
+		humanoid.JumpPower = n
+	end
+	setStatus("Jump " .. n)
+end)
+addCommand("hipheight", "set hip height", function(args)
+	refreshChar()
+	local n = validNum(args[1], 2, -10, 50)
+	if humanoid then humanoid.HipHeight = n end
+	setStatus("HipHeight " .. n)
+end)
+addCommand("gravity", "set gravity", function(args)
+	local n = validNum(args[1], 196.2, 0, 1000)
+	workspace.Gravity = n
+	setStatus("Gravity " .. n)
+end)
+addCommand("noclip", "toggle noclip", function()
+	setNoclip(not state.noclip)
+	setStatus("Noclip " .. (state.noclip and "on" or "off"))
+end)
+addCommand("clip", "restore collision", function()
+	setNoclip(false)
+	setStatus("Noclip off")
+end)
+addCommand("god", "toggle god mode", function()
+	setGod(not state.god)
+	setStatus("God " .. (state.god and "on" or "off"))
+end)
+addCommand("ungod", "disable god mode", function()
+	setGod(false)
+	setStatus("God off")
+end)
+addCommand("invisible", "toggle invisibility", function()
+	setInvisible(not state.invisible)
+	setStatus("Invisible " .. (state.invisible and "on" or "off"))
+end)
+addCommand("visible", "become visible", function()
+	setInvisible(false)
+	setStatus("Visible")
+end)
+addCommand("infinitejump", "toggle infinite jump", function()
+	state.infiniteJump = not state.infiniteJump
+	setStatus("InfiniteJump " .. (state.infiniteJump and "on" or "off"))
+end)
+addCommand("noinfinitejump", "disable infinite jump", function()
+	state.infiniteJump = false
+	setStatus("InfiniteJump off")
+end)
+addCommand("autojump", "toggle auto jump", function()
+	state.autoJump = not state.autoJump
+	setStatus("AutoJump " .. (state.autoJump and "on" or "off"))
+end)
+addCommand("stopautojump", "disable auto jump", function()
+	state.autoJump = false
+	setStatus("AutoJump off")
+end)
+addCommand("autowalk", "toggle auto walk", function()
+	state.autoWalk = not state.autoWalk
+	setStatus("AutoWalk " .. (state.autoWalk and "on" or "off"))
+end)
+addCommand("stopwalk", "disable auto walk", function()
+	state.autoWalk = false
+	setStatus("AutoWalk off")
+end)
+addCommand("spin", "toggle spin", function()
+	state.spin = not state.spin
+	setStatus("Spin " .. (state.spin and "on" or "off"))
+end)
+addCommand("spinspeed", "set spin speed", function(args)
+	state.spinSpeed = validNum(args[1], 5, -360, 360)
+	setStatus("SpinSpeed " .. state.spinSpeed)
+end)
+addCommand("sit", "sit character", function()
+	refreshChar()
+	if humanoid then humanoid.Sit = true end
+	return "Sat"
+end)
+addCommand("stand", "stand character", function()
+	refreshChar()
+	if humanoid then humanoid.Sit = false end
+	return "Standing"
+end)
+addCommand("levitate", "toggle levitation", function()
+	setLevitate(not state.levitate)
+	setStatus("Levitate " .. (state.levitate and "on" or "off"))
+end)
+addCommand("unlevitate", "disable levitation", function()
+	setLevitate(false)
+	setStatus("Levitate off")
+end)
+addCommand("clicktp", "toggle click teleport", function()
+	state.clickTp = not state.clickTp
+	setStatus("ClickTP " .. (state.clickTp and "on" or "off"))
+end)
+addCommand("noclicktp", "disable click teleport", function()
+	state.clickTp = false
+	setStatus("ClickTP off")
+end)
+addCommand("clickdelete", "toggle click delete", function()
+	state.clickDelete = not state.clickDelete
+	setStatus("ClickDelete " .. (state.clickDelete and "on" or "off"))
+end)
+addCommand("noclickdelete", "disable click delete", function()
+	state.clickDelete = false
+	setStatus("ClickDelete off")
+end)
+addCommand("savepos", "save current position", function()
+	refreshChar()
+	if root then
+		state.savedPos = root.CFrame
+		setStatus("Position saved")
+	else
+		setStatus("No character")
+	end
+end)
+addCommand("loadpos", "load saved position", function()
+	refreshChar()
+	if root and state.savedPos then
+		root.CFrame = state.savedPos
+		zeroRootVelocity()
+		setStatus("Position loaded")
+	else
+		setStatus("No saved position")
+	end
+end)
+addCommand("goto", "teleport to player", function(args)
+	local p = getPlayer(args[1], false)
+	local r = p and getRoot(p)
+	if r and root then
+		root.CFrame = CFrame.new(r.Position + Vector3.new(0, 3, 0))
+		setStatus("Teleported to " .. p.Name)
+	else
+		setStatus("Player not found")
+	end
+end)
+addCommand("bring", "bring player to you", function(args)
+	local p = getPlayer(args[1], false)
+	local r = p and getRoot(p)
+	if r and root then
+		r.CFrame = CFrame.new(root.Position + Vector3.new(0, 3, 0))
+		pcall(function()
+			if r.AssemblyLinearVelocity then
+				r.AssemblyLinearVelocity = Vector3.zero
+			else
+				r.Velocity = Vector3.zero
+			end
+		end)
+		setStatus("Brought " .. p.Name)
+	else
+		setStatus("Player not found")
+	end
+end)
+addCommand("tbring", "bring player facing you", function(args)
+	local p = getPlayer(args[1], false)
+	local r = p and getRoot(p)
+	if r and root then
+		r.CFrame = CFrame.lookAt(root.Position + Vector3.new(0, 3, 0), root.Position)
+		pcall(function()
+			if r.AssemblyLinearVelocity then
+				r.AssemblyLinearVelocity = Vector3.zero
+			else
+				r.Velocity = Vector3.zero
+			end
+		end)
+		setStatus("Tele-brought " .. p.Name)
+	else
+		setStatus("Player not found")
+	end
+end)
+addCommand("kill", "kill player", function(args)
+	local p = getPlayer(args[1], false)
+	local h = p and getHum(p)
+	if h then h.Health = 0; setStatus("Killed " .. p.Name) else setStatus("Player not found") end
+end)
+addCommand("killall", "kill all other players", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local h = getHum(p)
+			if h then h.Health = 0 end
+		end
+	end
+	setStatus("KillAll executed")
+end)
+addCommand("damage", "damage player", function(args)
+	local p = getPlayer(args[1], false)
+	local n = validNum(args[2], 10, 1, 100000)
+	local h = p and getHum(p)
+	if h then h:TakeDamage(n); setStatus("Damaged " .. p.Name .. " by " .. n) else setStatus("Player not found") end
+end)
+addCommand("heal", "heal player", function(args)
+	local p = getPlayer(args[1])
+	local h = getHum(p)
+	if h then h.Health = h.MaxHealth; setStatus("Healed " .. p.Name) end
+end)
+addCommand("healall", "heal all players", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		local h = getHum(p)
+		if h then h.Health = h.MaxHealth end
+	end
+	setStatus("HealAll executed")
+end)
+addCommand("burn", "burn player over time", function(args)
+	local p = getPlayer(args[1], false)
+	if p then state.burning[p] = true; setStatus("Burning " .. p.Name) else setStatus("Player not found") end
+end)
+addCommand("unburn", "stop burning", function(args)
+	local p = getPlayer(args[1], false)
+	if p then
+		state.burning[p] = nil
+		setStatus("Burn stopped for " .. p.Name)
+	else
+		setStatus("Player not found")
+	end
+end)
+addCommand("freeze", "freeze player", function(args)
+	local p = getPlayer(args[1], false)
+	setFrozen(p, true)
+	setStatus("Froze " .. (p and p.Name or "unknown"))
+end)
+addCommand("unfreeze", "unfreeze player", function(args)
+	local p = getPlayer(args[1], false)
+	setFrozen(p, false)
+	setStatus("Unfroze " .. (p and p.Name or "unknown"))
+end)
+addCommand("freezeall", "freeze all other players", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then setFrozen(p, true) end
+	end
+	setStatus("FreezeAll executed")
+end)
+addCommand("unfreezeall", "unfreeze all players", function()
+	clearFrozen()
+	setStatus("UnfreezeAll executed")
+end)
+addCommand("fling", "fling player", function(args)
+	local p = getPlayer(args[1], false)
+	local r = p and getRoot(p)
+	if not r then setStatus("Player not found"); return end
+	local mass = r.AssemblyMass or 0
+	if mass <= 0 then mass = r:GetMass() or 0 end
+	if mass <= 0 then mass = 1 end
+	local velocity = Vector3.new((math.random() - 0.5) * 200, 200, (math.random() - 0.5) * 200)
+	local angular = Vector3.new(math.random(-50, 50), math.random(-50, 50), math.random(-50, 50))
+	pcall(function() r:ApplyImpulse(velocity * mass) end)
+	pcall(function() r:ApplyAngularImpulse(angular * mass) end)
+	setStatus("Flinged " .. p.Name)
+end)
+addCommand("flingall", "fling all other players", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local r = getRoot(p)
+			if r then
+				local mass = r.AssemblyMass or 0
+				if mass <= 0 then mass = r:GetMass() or 0 end
+				if mass <= 0 then mass = 1 end
+				local velocity = Vector3.new((math.random() - 0.5) * 200, 200, (math.random() - 0.5) * 200)
+				local angular = Vector3.new(math.random(-25, 25), math.random(-25, 25), math.random(-25, 25))
+				pcall(function() r:ApplyImpulse(velocity * mass) end)
+				pcall(function() r:ApplyAngularImpulse(angular * mass) end)
+			end
+		end
+	end
+	setStatus("FlingAll executed")
+end)
+addCommand("respawn", "respawn player", function(args)
+	local p = getPlayer(args[1])
+	if not p then setStatus("Player not found"); return end
+	local ok = pcall(function() p:LoadCharacter() end)
+	if p == LocalPlayer then refreshChar() end
+	setStatus(ok and ("Respawned " .. p.Name) or ("Respawn failed for " .. p.Name))
+end)
+addCommand("kick", "remove player character locally", function(args)
+	local p = getPlayer(args[1], false)
+	if p and p.Character then
+		local ok = pcall(function() p.Character:Destroy() end)
+		if p == LocalPlayer then task.spawn(function() task.wait(0.1); refreshChar() end) end
+		setStatus(ok and ("Removed " .. p.Name) or ("Could not remove " .. p.Name))
+	else
+		setStatus("Player not found")
+	end
+end)
+addCommand("blind", "toggle black screen", function()
+	setBlind(not state.blind)
+	setStatus("Blind " .. (state.blind and "on" or "off"))
+end)
+addCommand("unblind", "remove black screen", function()
+	setBlind(false)
+	setStatus("Blind off")
+end)
+addCommand("forcefield", "add forcefield locally", function()
+	toggleForcefield(true)
+	setStatus("Forcefield added")
+end)
+addCommand("noforcefield", "remove forcefield locally", function()
+	toggleForcefield(false)
+	setStatus("Forcefield removed")
+end)
+addCommand("zombie", "make player follow you", function(args)
+	local p = getPlayer(args[1], false)
+	if p then state.zombies[p] = true; setStatus("Zombie " .. p.Name) else setStatus("Player not found") end
+end)
+addCommand("unzombie", "stop zombie", function(args)
+	local p = getPlayer(args[1], false)
+	if p then
+		state.zombies[p] = nil
+		setStatus("Zombie stopped for " .. p.Name)
+	else
+		setStatus("Player not found")
+	end
+end)
+addCommand("aimbot", "toggle aimbot on right mouse", function()
+	state.aimbot = not state.aimbot
+	setStatus("Aimbot " .. (state.aimbot and "on" or "off"))
+end)
+addCommand("noaimbot", "disable aimbot", function()
+	state.aimbot = false
+	setStatus("Aimbot off")
+end)
+addCommand("aimlock", "toggle camera aimlock", function()
+	state.aimlock = not state.aimlock
+	setStatus("Aimlock " .. (state.aimlock and "on" or "off"))
+end)
+addCommand("noaimlock", "disable aimlock", function()
+	state.aimlock = false
+	setStatus("Aimlock off")
+end)
+addCommand("silentaim", "toggle silent aim on click", function()
+	state.silentAim = not state.silentAim
+	setStatus("SilentAim " .. (state.silentAim and "on" or "off"))
+end)
+addCommand("nosilentaim", "disable silent aim", function()
+	state.silentAim = false
+	setStatus("SilentAim off")
+end)
+addCommand("crosshair", "show crosshair", function(args)
+	setCrosshair(true, getColor(args[1]))
+	setStatus("Crosshair shown")
+end)
+addCommand("nocrosshair", "hide crosshair", function()
+	setCrosshair(false)
+	setStatus("Crosshair hidden")
+end)
+addCommand("thirdperson", "third person camera", function()
+	LocalPlayer.CameraMode = Enum.CameraMode.Classic
+	LocalPlayer.CameraMinZoomDistance = 10
+	LocalPlayer.CameraMaxZoomDistance = 30
+	setStatus("Third person")
+end)
+addCommand("firstperson", "first person camera", function()
+	LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
+	setStatus("First person")
+end)
+addCommand("camzoom", "set camera zoom", function(args)
+	local n = validNum(args[1], 10, 0.5, 200)
+	LocalPlayer.CameraMode = Enum.CameraMode.Classic
+	LocalPlayer.CameraMinZoomDistance = n
+	LocalPlayer.CameraMaxZoomDistance = n + 5
+	setStatus("CamZoom " .. n)
+end)
+addCommand("fov", "set field of view", function(args)
+	local n = validNum(args[1], 70, 1, 120)
+	cam().FieldOfView = n
+	setStatus("FOV " .. n)
+end)
+addCommand("esp", "toggle player ESP", function()
+	state.esp = not state.esp
+	refreshESP()
+	setStatus("ESP " .. (state.esp and "on" or "off"))
+end)
+addCommand("noesp", "disable player ESP", function()
+	state.esp = false
+	refreshESP()
+	setStatus("ESP off")
+end)
+addCommand("nameesp", "toggle name tags", function()
+	state.nameEsp = not state.nameEsp
+	refreshNameESP()
+	setStatus("NameESP " .. (state.nameEsp and "on" or "off"))
+end)
+addCommand("nonameesp", "disable name tags", function()
+	state.nameEsp = false
+	refreshNameESP()
+	setStatus("NameESP off")
+end)
+addCommand("tracer", "toggle player tracers", function()
+	state.tracer = not state.tracer
+	refreshTracers()
+	setStatus("Tracer " .. (state.tracer and "on" or "off"))
+end)
+addCommand("notracer", "disable player tracers", function()
+	state.tracer = false
+	refreshTracers()
+	setStatus("Tracer off")
+end)
+addCommand("espcolor", "set ESP color", function(args)
+	state.espColor = getColor(args[1])
+	refreshESP()
+	refreshNameESP()
+	refreshTracers()
+	if state.crosshair then setCrosshair(true, state.espColor) end
+	setStatus("ESP color set")
+end)
+addCommand("xray", "toggle xray", function()
+	setXray(not state.xray)
+	setStatus("Xray " .. (state.xray and "on" or "off"))
+end)
+addCommand("fullbright", "enable fullbright", function()
+	setFullbright(true)
+	setStatus("Fullbright on")
+end)
+addCommand("nofullbright", "disable fullbright", function()
+	setFullbright(false)
+	setStatus("Fullbright off")
+end)
+addCommand("time", "set clock time", function(args)
+	local n = validNum(args[1], 12, 0, 24)
+	Lighting.ClockTime = n
+	setStatus("Time " .. n)
+end)
+addCommand("fog", "set fog end", function(args)
+	local n = validNum(args[1], 100000, 0, 1e7)
+	Lighting.FogEnd = n
+	setStatus("FogEnd " .. n)
+end)
+addCommand("bright", "set brightness", function(args)
+	local n = validNum(args[1], 2, 0, 10)
+	Lighting.Brightness = n
+	setStatus("Brightness " .. n)
+end)
+addCommand("ambient", "set ambient color", function(args)
+	Lighting.Ambient = getColor(args[1])
+	setStatus("Ambient set")
+end)
+addCommand("flyspeed", "set flight speed", function(args)
+	local n = validNum(args[1], 60, 10, 300)
+	state.flySpeed = n
+	setStatus("FlySpeed " .. n)
+end)
+addCommand("deletepart", "enable click delete mode", function()
+	state.clickDelete = true
+	setStatus("ClickDelete on")
+end)
+addCommand("deleteall", "delete workspace parts locally", function()
+	local count = 0
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and not isOwnCharacter(obj) then
+			pcall(function() obj:Destroy() end)
+			count = count + 1
+		end
+	end
+	setStatus("Deleted " .. count .. " parts locally")
+end)
+addCommand("godall", "god all other players locally", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			local h = getHum(p)
+			if h and not state.godAll[p] then
+				state.godAll[p] = h.MaxHealth
+				h.MaxHealth = 100000
+				h.Health = 100000
+			end
+		end
+	end
+	state.godAllActive = true
+	applyPlayerWideStates()
+	setStatus("GodAll on")
+end)
+addCommand("ungodall", "restore all player health", function()
+	for p, orig in pairs(state.godAll) do
+		local h = getHum(p)
+		if h then h.MaxHealth = orig; h.Health = math.min(h.Health, orig) end
+	end
+	state.godAll = {}
+	state.godAllActive = false
+	setStatus("GodAll off")
+end)
+addCommand("invisibleall", "hide all other players locally", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and not state.invisAll[p] then
+			local orig = {}
+			for _, part in ipairs(p.Character:GetDescendants()) do
+				if part:IsA("BasePart") then
+					orig[part] = part.Transparency
+					part.Transparency = 1
+				end
+			end
+			state.invisAll[p] = orig
+		end
+	end
+	state.invisAllActive = true
+	setStatus("InvisibleAll on")
+end)
+addCommand("visibleall", "show all players locally", function()
+	for p, orig in pairs(state.invisAll) do
+		local c = p.Character
+		if c then
+			for _, part in ipairs(c:GetDescendants()) do
+				if part:IsA("BasePart") and orig[part] then part.Transparency = orig[part] end
+			end
+		end
+	end
+	state.invisAll = {}
+	state.invisAllActive = false
+	setStatus("InvisibleAll off")
+end)
+addCommand("noclipall", "noclip all other players locally", function()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and not state.noclipAll[p] then
+			local orig = {}
+			for _, part in ipairs(p.Character:GetDescendants()) do
+				if part:IsA("BasePart") then
+					orig[part] = part.CanCollide
+					part.CanCollide = false
+				end
+			end
+			state.noclipAll[p] = orig
+		end
+	end
+	state.noclipAllActive = true
+	setStatus("NoclipAll on")
+end)
+addCommand("clipall", "restore collision for all players", function()
+	for p, orig in pairs(state.noclipAll) do
+		local c = p.Character
+		if c then
+			for _, part in ipairs(c:GetDescendants()) do
+				if part:IsA("BasePart") and orig[part] then part.CanCollide = orig[part] end
+			end
+		end
+	end
+	state.noclipAll = {}
+	state.noclipAllActive = false
+	setStatus("NoclipAll off")
+end)
+addCommand("highjump", "very high jump", function()
+	refreshChar()
+	if humanoid then humanoid.UseJumpPower = true; humanoid.JumpPower = 500 end
+	setStatus("HighJump on")
+end)
+addCommand("lowspeed", "low walk speed", function()
+	refreshChar()
+	if humanoid then humanoid.WalkSpeed = 5 end
+	setStatus("LowSpeed on")
+end)
+addCommand("normalspeed", "restore walk speed", function()
+	refreshChar()
+	if humanoid then humanoid.WalkSpeed = state.originals.walkSpeed or 16 end
+	setStatus("Speed restored")
+end)
+addCommand("normaljump", "restore jump power", function()
+	refreshChar()
+	if humanoid then
+		humanoid.JumpPower = state.originals.jumpPower or 50
+		humanoid.JumpHeight = state.originals.jumpHeight or 7.2
+		humanoid.UseJumpPower = state.originals.useJumpPower
+	end
+	setStatus("Jump restored")
+end)
+addCommand("resetgravity", "restore gravity", function()
+	workspace.Gravity = state.originals.gravity or 196.2
+	setStatus("Gravity restored")
+end)
+addCommand("resetall", "reset every state", function()
+	resetAll()
+end)
+
+-- PYREX modern GUI — server tab, credits, 2 themes, draggable bubble, 100 commands
+local ui = {}
+ui.accentLabels = {}
+local activeThemeIndex = 1
+
+local function corner(parent, radius)
+	local c = Instance.new("UICorner", parent)
+	c.CornerRadius = UDim.new(0, radius or 10)
+	return c
+end
+
+local function outline(parent, transparency)
+	local s = Instance.new("UIStroke", parent)
+	s.Color = Color3.new(1, 1, 1)
+	s.Transparency = transparency or 0.9
+	s.Thickness = 1
+	return s
+end
+
+local function hexColor(hex)
+	return Color3.fromRGB(
+		tonumber(hex:sub(1, 2), 16),
+		tonumber(hex:sub(3, 4), 16),
+		tonumber(hex:sub(5, 6), 16)
+	)
+end
+
+local function gradient(parent, c1, c2)
+	local g = Instance.new("UIGradient", parent)
+	g.Color = ColorSequence.new(c1, c2)
+	return g
+end
+
+local function label(parent, text, size, pos, textSize, color, font)
+	local l = Instance.new("TextLabel", parent)
+	l.Size = size
+	l.Position = pos
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextColor3 = color or Color3.new(1, 1, 1)
+	l.TextSize = textSize or 14
+	l.Font = font or Enum.Font.Gotham
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	return l
+end
+
+local activeTweens = {}
+local function uiTween(obj, props, dur, style, dir, repeats, reverses)
+	local map = activeTweens[obj]
+	if not map then map = {}; activeTweens[obj] = map end
+	for prop in pairs(props) do
+		local old = map[prop]
+		if old then pcall(function() old:Cancel() end); map[prop] = nil end
+	end
+	local ok, tw = pcall(function()
+		return TS:Create(obj, TweenInfo.new(
+			dur or 0.16,
+			style or Enum.EasingStyle.Quart,
+			dir or Enum.EasingDirection.Out,
+			repeats or 0,
+			reverses == true,
+			0
+		), props)
+	end)
+	if ok and tw then
+		for prop in pairs(props) do map[prop] = tw end
+		connect(tw.Completed, function()
+			for prop in pairs(props) do
+				if map[prop] == tw then map[prop] = nil end
+			end
+		end)
+		tw:Play()
+	end
+	return tw
+end
+
+local function tapSize(btn, base)
+	local small = UDim2.new(0, math.max(14, base.X.Offset - 5), 0, math.max(14, base.Y.Offset - 4))
+	btn.Size = base
+	uiTween(btn, {Size = small}, 0.1, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 1, true)
+end
+
+local function tapColor(btn)
+	local c = btn.BackgroundColor3
+	local hi = Color3.new(math.min(1, c.R + 0.16), math.min(1, c.G + 0.16), math.min(1, c.B + 0.16))
+	uiTween(btn, {BackgroundColor3 = hi}, 0.1, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 1, true)
+end
+
+local function hoverSize(btn, normal, raised, bucket)
+	local enter = connect(btn.MouseEnter, function()
+		uiTween(btn, {Size = raised}, 0.14, Enum.EasingStyle.Back)
+	end)
+	local leave = connect(btn.MouseLeave, function()
+		uiTween(btn, {Size = normal}, 0.14, Enum.EasingStyle.Quart)
+	end)
+	if bucket then
+		table.insert(bucket, enter)
+		table.insert(bucket, leave)
+	end
+end
+
+local themes = {
+	{n = "01 Full Crimson", a = hexColor("e01e3c"), b = hexColor("ff3b5c"), bg = hexColor("120406")},
+	{n = "02 GTA VI",       a = hexColor("ff4d9e"), b = hexColor("35d0ff"), bg = hexColor("0a0714")},
+}
+
+local guiParent = LocalPlayer:WaitForChild("PlayerGui")
+for _, old in ipairs(guiParent:GetChildren()) do
+	if old:IsA("ScreenGui") and old.Name == "PYREX" then
+		pcall(function() old:Destroy() end)
+	end
+end
+local gui = Instance.new("ScreenGui")
+gui.Name = "PYREX"
+gui.DisplayOrder = 20
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = guiParent
+G.HUB_GUI = gui
+
+local main = Instance.new("Frame", gui)
+main.Size = UDim2.new(0, 1000, 0, 640)
+main.Position = UDim2.new(0.5, -500, 0.5, -320)
+main.BackgroundColor3 = themes[1].bg
+main.BorderSizePixel = 0
+corner(main, 16)
+outline(main, 0.88)
+local mainBase = main.Size
+
+-- draggable bubble when minimized — click it to restore the full window
+local bubble = Instance.new("TextButton", gui)
+bubble.Size = UDim2.new(0, 64, 0, 64)
+bubble.Position = UDim2.new(0, 40, 0, 200)
+bubble.Text = "PY"
+bubble.TextColor3 = Color3.new(1, 1, 1)
+bubble.TextSize = 20
+bubble.Font = Enum.Font.GothamBold
+bubble.BorderSizePixel = 0
+bubble.Visible = false
+corner(bubble, 32)
+ui.bubbleGrad = gradient(bubble, themes[1].a, themes[1].b)
+outline(bubble, 0.85)
+local bubbleBase = bubble.Size
+hoverSize(bubble, bubbleBase, UDim2.new(0, 68, 0, 68))
+
+-- top bar with the PYREX lockup
+local top = Instance.new("Frame", main)
+top.Size = UDim2.new(1, 0, 0, 58)
+top.Position = UDim2.new(0, 0, 0, 0)
+top.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+top.BorderSizePixel = 0
+
+local badge = Instance.new("Frame", top)
+badge.Size = UDim2.new(0, 36, 0, 36)
+badge.Position = UDim2.new(0, 16, 0, 11)
+badge.BackgroundColor3 = themes[1].a
+corner(badge, 10)
+ui.badgeGrad = gradient(badge, themes[1].a, themes[1].b)
+label(badge, "PY", UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0), 16, Color3.new(1, 1, 1), Enum.Font.GothamBold).TextXAlignment = Enum.TextXAlignment.Center
+
+local wordmark = label(top, "PYREX", UDim2.new(0, 160, 0, 34), UDim2.new(0, 62, 0, 12), 24, Color3.new(1, 1, 1), Enum.Font.GothamBold)
+ui.wordGrad = gradient(wordmark, themes[1].a, themes[1].b)
+
+local livePill = Instance.new("Frame", top)
+livePill.Size = UDim2.new(0, 130, 0, 28)
+livePill.Position = UDim2.new(1, -410, 0, 15)
+livePill.BackgroundColor3 = Color3.fromRGB(35, 55, 45)
+corner(livePill, 14)
+outline(livePill, 0.85)
+local liveDot = Instance.new("Frame", livePill)
+liveDot.Size = UDim2.new(0, 8, 0, 8)
+liveDot.Position = UDim2.new(0, 11, 0, 10)
+liveDot.BackgroundColor3 = Color3.fromRGB(60, 230, 160)
+corner(liveDot, 4)
+label(livePill, "ONLINE", UDim2.new(0, 100, 0, 28), UDim2.new(0, 24, 0, 0), 11, Color3.fromRGB(60, 230, 160), Enum.Font.GothamBold)
+
+local themePill = Instance.new("TextLabel", top)
+themePill.Size = UDim2.new(0, 170, 0, 28)
+themePill.Position = UDim2.new(1, -270, 0, 15)
+themePill.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+themePill.Text = "01 FULL CRIMSON"
+themePill.TextColor3 = Color3.new(0.85, 0.85, 0.92)
+themePill.TextSize = 11
+themePill.Font = Enum.Font.GothamBold
+corner(themePill, 14)
+outline(themePill, 0.85)
+
+local spotlightBtn = Instance.new("TextButton", top)
+spotlightBtn.Size = UDim2.new(0, 280, 0, 28)
+spotlightBtn.Position = UDim2.new(0, 250, 0, 15)
+spotlightBtn.Text = "SPOTLIGHT /fly — toggle flight"
+spotlightBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+spotlightBtn.TextColor3 = themes[1].b
+spotlightBtn.TextSize = 10
+spotlightBtn.Font = Enum.Font.GothamBold
+spotlightBtn.TextTruncate = Enum.TextTruncate.AtEnd
+spotlightBtn.BorderSizePixel = 0
+corner(spotlightBtn, 14)
+outline(spotlightBtn, 0.85)
+
+local minBtn = Instance.new("TextButton", top)
+minBtn.Size = UDim2.new(0, 28, 0, 28)
+minBtn.Position = UDim2.new(1, -88, 0, 15)
+minBtn.Text = "-"
+minBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+minBtn.TextColor3 = Color3.new(1, 1, 1)
+minBtn.TextSize = 16
+minBtn.Font = Enum.Font.GothamBold
+corner(minBtn, 8)
+local minBtnBase = minBtn.Size
+hoverSize(minBtn, minBtnBase, UDim2.new(0, 32, 0, 32))
+
+local closeBtn = Instance.new("TextButton", top)
+closeBtn.Size = UDim2.new(0, 28, 0, 28)
+closeBtn.Position = UDim2.new(1, -52, 0, 15)
+closeBtn.Text = "X"
+closeBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 55)
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.TextSize = 14
+closeBtn.Font = Enum.Font.GothamBold
+corner(closeBtn, 8)
+local closeBtnBase = closeBtn.Size
+hoverSize(closeBtn, closeBtnBase, UDim2.new(0, 32, 0, 32))
+
+-- tab strip: server, credits, commands, then 2 themes
+local tabStrip = Instance.new("ScrollingFrame", main)
+tabStrip.Size = UDim2.new(1, 0, 0, 44)
+tabStrip.Position = UDim2.new(0, 0, 0, 58)
+tabStrip.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+tabStrip.BorderSizePixel = 0
+tabStrip.ScrollingDirection = Enum.ScrollingDirection.X
+tabStrip.ScrollBarThickness = 3
+tabStrip.CanvasSize = UDim2.new(0, 620, 0, 44)
+
+local tabButtons = {}
+local tabList = {}
+local tabX = 10
+local function makeTab(text, width, on_click)
+	local b = Instance.new("TextButton", tabStrip)
+	local baseSize = UDim2.new(0, width, 0, 30)
+	b.Size = baseSize
+	b.Position = UDim2.new(0, tabX, 0, 7)
+	b.Text = text
+	b.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+	b.TextColor3 = Color3.new(0.75, 0.75, 0.85)
+	b.TextSize = 11
+	b.Font = Enum.Font.GothamBold
+	b.BorderSizePixel = 0
+	corner(b, 8)
+	hoverSize(b, baseSize, UDim2.new(0, width + 4, 0, 32))
+	connect(b.MouseButton1Click, function()
+		tapSize(b, baseSize)
+		on_click()
+		tapColor(b)
+	end)
+	table.insert(tabList, b)
+	tabX = tabX + width + 6
+	return b
+end
+
+local body = Instance.new("Frame", main)
+body.Size = UDim2.new(1, 0, 1, -122)
+body.Position = UDim2.new(0, 0, 0, 102)
+body.BackgroundTransparency = 1
+
+local side = Instance.new("Frame", body)
+side.Size = UDim2.new(0, 250, 1, 0)
+side.Position = UDim2.new(0, 0, 0, 0)
+side.BackgroundColor3 = Color3.fromRGB(19, 19, 29)
+side.BorderSizePixel = 0
+
+table.insert(ui.accentLabels, label(side, "THE BENCH IS LIT", UDim2.new(0, 218, 0, 18), UDim2.new(0, 16, 0, 16), 10, themes[1].b, Enum.Font.GothamBold))
+local hero = label(side, "100 commands.\nOne click.", UDim2.new(0, 218, 0, 58), UDim2.new(0, 16, 0, 38), 24, Color3.new(1, 1, 1), Enum.Font.GothamBold)
+local lede = label(side, "Pick a command from the grid or type it below. Press Enter to fire. Everything stays local to your client.", UDim2.new(0, 218, 0, 58), UDim2.new(0, 16, 0, 102), 11, Color3.new(0.55, 0.55, 0.66), Enum.Font.Gotham)
+
+input = Instance.new("TextBox", side)
+input.Size = UDim2.new(0, 218, 0, 40)
+input.Position = UDim2.new(0, 16, 0, 170)
+input.PlaceholderText = "fly"
+input.Text = ""
+input.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+input.TextColor3 = Color3.new(1, 1, 1)
+input.TextSize = 14
+input.Font = Enum.Font.Gotham
+input.BorderSizePixel = 0
+input.ClearTextOnFocus = false
+corner(input, 10)
+outline(input, 0.88)
+
+local execBtn = Instance.new("TextButton", side)
+execBtn.Size = UDim2.new(0, 218, 0, 42)
+execBtn.Position = UDim2.new(0, 16, 0, 220)
+execBtn.Text = "EXECUTE COMMAND"
+execBtn.TextColor3 = Color3.new(1, 1, 1)
+execBtn.TextSize = 13
+execBtn.Font = Enum.Font.GothamBold
+execBtn.BorderSizePixel = 0
+execBtn.BackgroundColor3 = themes[1].a
+ui.execGrad = gradient(execBtn, themes[1].a, themes[1].b)
+corner(execBtn, 10)
+local execBtnBase = execBtn.Size
+hoverSize(execBtn, execBtnBase, UDim2.new(0, 224, 0, 44))
+
+statusLabel = label(side, "", UDim2.new(0, 218, 0, 20), UDim2.new(0, 16, 0, 264), 12, Color3.fromRGB(120, 220, 140), Enum.Font.Gotham)
+
+local statData = {
+	{"60", "FLY SPD"}, {"16", "WALK SPD"},
+	{"50", "JUMP PWR"}, {"0", "PLAYERS"},
+}
+local statValues = {}
+for i, data in ipairs(statData) do
+	local col = (i - 1) % 2
+	local row = math.floor((i - 1) / 2)
+	local card = Instance.new("Frame", side)
+	card.Size = UDim2.new(0, 104, 0, 58)
+	card.Position = UDim2.new(0, 16 + col * 114, 0, 330 + row * 62)
+	card.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+	corner(card, 10)
+	outline(card, 0.9)
+	local value = label(card, data[1], UDim2.new(1, -8, 0, 28), UDim2.new(0, 8, 0, 6), 20, Color3.new(1, 1, 1), Enum.Font.GothamBold)
+	label(card, data[2], UDim2.new(1, -8, 0, 16), UDim2.new(0, 8, 0, 36), 9, Color3.new(0.55, 0.55, 0.66), Enum.Font.GothamBold)
+	table.insert(statValues, value)
+end
+
+local function refreshStatChips()
+	local h = humanoid
+	statValues[1].Text = tostring(state.flySpeed or 60)
+	statValues[2].Text = h and tostring(math.floor(h.WalkSpeed)) or "16"
+	statValues[3].Text = h and tostring(math.floor(h.UseJumpPower and h.JumpPower or h.JumpHeight)) or "50"
+	statValues[4].Text = tostring(#Players:GetPlayers())
+end
+
+local themeNote = label(side, "01 Full Crimson — crimson → hot red", UDim2.new(0, 218, 0, 18), UDim2.new(0, 16, 1, -20), 10, Color3.new(0.45, 0.45, 0.55), Enum.Font.Gotham)
+
+local content = Instance.new("Frame", body)
+content.Size = UDim2.new(1, -250, 1, 0)
+content.Position = UDim2.new(0, 250, 0, 0)
+content.BackgroundTransparency = 1
+
+local tools = Instance.new("Frame", content)
+tools.Size = UDim2.new(1, 0, 0, 52)
+tools.Position = UDim2.new(0, 0, 0, 0)
+tools.BackgroundTransparency = 1
+
+local searchBox = Instance.new("TextBox", tools)
+searchBox.Size = UDim2.new(0, 220, 0, 34)
+searchBox.Position = UDim2.new(0, 12, 0, 9)
+searchBox.PlaceholderText = "Search commands..."
+searchBox.Text = ""
+searchBox.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+searchBox.TextColor3 = Color3.new(1, 1, 1)
+searchBox.TextSize = 12
+searchBox.Font = Enum.Font.Gotham
+searchBox.BorderSizePixel = 0
+corner(searchBox, 9)
+outline(searchBox, 0.88)
+
+local categoryButtons = {}
+local categoryList = {}
+local catX = 244
+local function makeCategory(text, on_click)
+	local b = Instance.new("TextButton", tools)
+	local baseSize = UDim2.new(0, 74, 0, 30)
+	b.Size = baseSize
+	b.Position = UDim2.new(0, catX, 0, 11)
+	b.Text = text
+	b.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+	b.TextColor3 = Color3.new(0.7, 0.7, 0.8)
+	b.TextSize = 10
+	b.Font = Enum.Font.GothamBold
+	b.BorderSizePixel = 0
+	corner(b, 8)
+	hoverSize(b, baseSize, UDim2.new(0, 78, 0, 32))
+	connect(b.MouseButton1Click, function()
+		tapSize(b, baseSize)
+		on_click()
+		tapColor(b)
+	end)
+	table.insert(categoryList, b)
+	catX = catX + 80
+	return b
+end
+
+local scroll = Instance.new("ScrollingFrame", content)
+scroll.Size = UDim2.new(1, -24, 1, -176)
+scroll.Position = UDim2.new(0, 12, 0, 60)
+scroll.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 5
+scroll.CanvasSize = UDim2.new(0, 0, 0, 1700)
+corner(scroll, 12)
+outline(scroll, 0.92)
+
+local feedPanel = Instance.new("Frame", content)
+feedPanel.Size = UDim2.new(1, -24, 0, 104)
+feedPanel.Position = UDim2.new(0, 12, 1, -116)
+feedPanel.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+feedPanel.BorderSizePixel = 0
+corner(feedPanel, 12)
+outline(feedPanel, 0.92)
+table.insert(ui.accentLabels, label(feedPanel, "LIVE COMMAND FEED", UDim2.new(1, -16, 0, 12), UDim2.new(0, 8, 0, 5), 9, themes[1].b, Enum.Font.GothamBold))
+local feedRows = {}
+for i = 1, 6 do
+	table.insert(feedRows, label(feedPanel, "", UDim2.new(1, -16, 0, 12), UDim2.new(0, 8, 0, 22 + (i - 1) * 13), 10, Color3.new(0.55, 0.55, 0.66), Enum.Font.Gotham))
+end
+local commandLog = {}
+local function pushLog(text, ok)
+	if not G.HUB_GUI or state.cleanedUp then return end
+	table.insert(commandLog, {text = os.date("%H:%M:%S") .. "  " .. text, ok = ok == true})
+	while #commandLog > 6 do table.remove(commandLog, 1) end
+	for i, row in ipairs(feedRows) do
+		local entry = commandLog[i]
+		row.Text = entry and entry.text or ""
+		row.TextColor3 = entry and (entry.ok and Color3.fromRGB(120, 220, 140) or Color3.fromRGB(255, 110, 125)) or Color3.new(0.55, 0.55, 0.66)
+	end
+end
+
+-- server + player info panel
+local serverPanel = Instance.new("Frame", content)
+serverPanel.Size = UDim2.new(1, -24, 1, -66)
+serverPanel.Position = UDim2.new(0, 12, 0, 60)
+serverPanel.BackgroundTransparency = 1
+serverPanel.Visible = false
+
+local serverValues = {}
+local function makeCard(parent, pos, size, title)
+	local card = Instance.new("Frame", parent)
+	card.Size = size
+	card.Position = pos
+	card.BackgroundColor3 = Color3.fromRGB(25, 25, 36)
+	corner(card, 14)
+	outline(card, 0.9)
+	table.insert(ui.accentLabels, label(card, title, UDim2.new(1, -20, 0, 20), UDim2.new(0, 12, 0, 12), 11, themes[1].b, Enum.Font.GothamBold))
+	local y = 38
+	local function row(key, text)
+		label(card, text, UDim2.new(0, 130, 0, 22), UDim2.new(0, 12, 0, y), 11, Color3.new(0.55, 0.55, 0.66), Enum.Font.Gotham)
+		local v = label(card, "-", UDim2.new(1, -160, 0, 22), UDim2.new(0, 148, 0, y), 11, Color3.new(0.95, 0.95, 1), Enum.Font.Gotham)
+		v.TextXAlignment = Enum.TextXAlignment.Right
+		serverValues[key] = v
+		y = y + 27
+	end
+	return row
+end
+
+local serverRow = makeCard(serverPanel, UDim2.new(0, 0, 0, 0), UDim2.new(0.48, -8, 0, 260), "SERVER")
+serverRow("place", "Place ID")
+serverRow("job", "Job ID")
+serverRow("players", "Players")
+serverRow("ping", "Ping")
+serverRow("uptime", "Uptime")
+
+local playerRow = makeCard(serverPanel, UDim2.new(0.52, 8, 0, 0), UDim2.new(0.48, -8, 0, 260), "LOCAL PLAYER")
+playerRow("name", "Name")
+playerRow("userid", "User ID")
+playerRow("health", "Health")
+playerRow("speed", "Walk speed")
+playerRow("jump", "Jump power")
+playerRow("position", "Position")
+
+local rosterCard = Instance.new("Frame", serverPanel)
+rosterCard.Size = UDim2.new(1, 0, 0, 170)
+rosterCard.Position = UDim2.new(0, 0, 0, 272)
+rosterCard.BackgroundColor3 = Color3.fromRGB(25, 25, 36)
+corner(rosterCard, 14)
+outline(rosterCard, 0.9)
+table.insert(ui.accentLabels, label(rosterCard, "PLAYERS IN SERVER", UDim2.new(1, -20, 0, 20), UDim2.new(0, 12, 0, 12), 11, themes[1].b, Enum.Font.GothamBold))
+local rosterLabels = {}
+for i = 1, 5 do
+	local l = label(rosterCard, "-", UDim2.new(1, -24, 0, 22), UDim2.new(0, 12, 0, 38 + (i - 1) * 25), 11, Color3.new(0.85, 0.85, 0.95), Enum.Font.Gotham)
+	table.insert(rosterLabels, l)
+end
+
+local sessionStart = os.clock()
+local function refreshServerInfo()
+	refreshChar()
+	local playerList = Players:GetPlayers()
+	if serverValues.place then serverValues.place.Text = tostring(game.PlaceId) end
+	if serverValues.job then
+		local job = game.JobId
+		serverValues.job.Text = job ~= "" and job:sub(1, 18) or "Private"
+	end
+	if serverValues.players then
+		local maxPlayers = Players.MaxPlayers
+		serverValues.players.Text = maxPlayers and maxPlayers > 0 and (#playerList .. " / " .. maxPlayers) or tostring(#playerList)
+	end
+	if serverValues.ping then
+		local ok, ping = pcall(function() return LocalPlayer:GetNetworkPing() end)
+		serverValues.ping.Text = ok and (math.floor(ping * 1000) .. " ms") or "n/a"
+	end
+	if serverValues.uptime then
+		local t = math.floor(os.clock() - sessionStart)
+		serverValues.uptime.Text = string.format("%02d:%02d:%02d", math.floor(t / 3600), math.floor(t / 60) % 60, t % 60)
+	end
+	if serverValues.name then serverValues.name.Text = LocalPlayer.Name end
+	if serverValues.userid then serverValues.userid.Text = tostring(LocalPlayer.UserId) end
+	if serverValues.health then serverValues.health.Text = humanoid and (math.floor(humanoid.Health) .. " / " .. math.floor(humanoid.MaxHealth)) or "-" end
+	if serverValues.speed then serverValues.speed.Text = humanoid and tostring(math.floor(humanoid.WalkSpeed)) or "-" end
+	if serverValues.jump then serverValues.jump.Text = humanoid and tostring(math.floor(humanoid.UseJumpPower and humanoid.JumpPower or humanoid.JumpHeight)) or "-" end
+	if serverValues.position then
+		serverValues.position.Text = root and string.format("%.0f, %.0f, %.0f", root.Position.X, root.Position.Y, root.Position.Z) or "-"
+	end
+	for i = 1, 5 do
+		local p = playerList[i]
+		if p then
+			local ok, ping = pcall(function() return p:GetNetworkPing() end)
+			rosterLabels[i].Text = p.Name .. "  ·  " .. (ok and (math.floor(ping * 1000) .. " ms") or "n/a")
+		else
+			rosterLabels[i].Text = "-"
+		end
+	end
+end
+
+-- credits panel with brand tiles and verified checks
+local creditsPanel = Instance.new("Frame", content)
+creditsPanel.Size = UDim2.new(1, -24, 1, -66)
+creditsPanel.Position = UDim2.new(0, 12, 0, 60)
+creditsPanel.BackgroundTransparency = 1
+creditsPanel.Visible = false
+
+label(creditsPanel, "Credits & Contact", UDim2.new(1, 0, 0, 30), UDim2.new(0, 4, 0, 6), 24, Color3.new(1, 1, 1), Enum.Font.GothamBold)
+label(creditsPanel, "The people behind the bench. Reach out, say what's up.", UDim2.new(1, 0, 0, 20), UDim2.new(0, 5, 0, 40), 12, Color3.new(0.55, 0.55, 0.66), Enum.Font.Gotham)
+
+local function makeCreditCard(y, brandColor, glyph, platform, handle, role)
+	local card = Instance.new("Frame", creditsPanel)
+	card.Size = UDim2.new(1, -8, 0, 66)
+	card.Position = UDim2.new(0, 4, 0, y)
+	card.BackgroundColor3 = Color3.fromRGB(28, 28, 39)
+	corner(card, 14)
+	outline(card, 0.9)
+	local tile = Instance.new("Frame", card)
+	tile.Size = UDim2.new(0, 42, 0, 42)
+	tile.Position = UDim2.new(0, 12, 0, 12)
+	tile.BackgroundColor3 = brandColor
+	corner(tile, 11)
+	label(tile, glyph, UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0), 19, Color3.new(1, 1, 1), Enum.Font.GothamBold).TextXAlignment = Enum.TextXAlignment.Center
+	table.insert(ui.accentLabels, label(card, platform:upper(), UDim2.new(0, 300, 0, 16), UDim2.new(0, 68, 0, 13), 10, themes[1].b, Enum.Font.GothamBold))
+	label(card, handle, UDim2.new(0, 240, 0, 24), UDim2.new(0, 68, 0, 32), 16, Color3.new(1, 1, 1), Enum.Font.GothamBold)
+	local verified = Instance.new("Frame", card)
+	verified.Size = UDim2.new(0, 16, 0, 16)
+	verified.Position = UDim2.new(1, -28, 0, 36)
+	verified.BackgroundColor3 = Color3.fromRGB(29, 155, 240)
+	corner(verified, 8)
+	label(verified, "✓", UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0), 11, Color3.new(1, 1, 1), Enum.Font.GothamBold).TextXAlignment = Enum.TextXAlignment.Center
+	local tag = Instance.new("Frame", card)
+	tag.Size = UDim2.new(0, 92, 0, 24)
+	tag.Position = UDim2.new(1, -104, 0, 21)
+	tag.BackgroundColor3 = Color3.fromRGB(40, 40, 54)
+	corner(tag, 12)
+	local t = label(tag, role, UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0), 10, Color3.new(0.75, 0.75, 0.85), Enum.Font.GothamBold)
+	t.TextXAlignment = Enum.TextXAlignment.Center
+end
+
+makeCreditCard(74, Color3.fromRGB(88, 101, 242), "D", "Discord", "@yowza_4", "DEV")
+makeCreditCard(150, Color3.fromRGB(226, 35, 34), "R", "Roblox", "@factizr", "OWNER")
+makeCreditCard(226, Color3.fromRGB(140, 125, 255), "S", "Scriptblox", "@Abcforuh", "PUBLISHER")
+
+-- categories for command filtering
+local function setFrom(list)
+	local t = {}
+	for word in list:gmatch("%S+") do t[word] = true end
+	return t
+end
+local catSets = {
+	Movement = setFrom("fly unfly flyspeed speed jump hipheight gravity noclip clip infinitejump noinfinitejump autojump stopautojump autowalk stopwalk spin spinspeed levitate unlevitate highjump lowspeed normalspeed normaljump resetgravity savepos loadpos"),
+	Player = setFrom("goto bring tbring respawn kick sit stand zombie unzombie heal healall godall ungodall invisibleall visibleall noclipall clipall"),
+	Combat = setFrom("kill killall damage burn unburn freeze unfreeze freezeall unfreezeall fling flingall aimbot noaimbot aimlock noaimlock silentaim nosilentaim"),
+	Visual = setFrom("esp noesp nameesp nonameesp tracer notracer espcolor xray fullbright nofullbright crosshair nocrosshair blind unblind invisible visible god ungod forcefield noforcefield thirdperson firstperson camzoom fov time fog bright ambient clicktp noclicktp clickdelete noclickdelete deletepart deleteall"),
+	System = setFrom("cmds help clear remove rejoin resetall"),
+}
+local function categoryOf(name)
+	for _, cat in ipairs({"Movement", "Player", "Combat", "Visual", "System"}) do
+		if catSets[cat][name] then return cat end
+	end
+	return "System"
+end
+
+local activeCategory = "All"
+local activePanel = "commands"
+local filterPending = false
+local nextFilterTime = 0
+local commandButtonConnections = {}
+
+local function refreshTabVisuals()
+	for _, b in ipairs(tabList) do
+		b.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+		b.TextColor3 = Color3.new(0.75, 0.75, 0.85)
+	end
+	for _, b in ipairs(categoryList) do
+		b.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+		b.TextColor3 = Color3.new(0.7, 0.7, 0.8)
+	end
+	local active = themes[activeThemeIndex or 1].a
+	if tabButtons[activePanel] then
+		tabButtons[activePanel].BackgroundColor3 = active
+		tabButtons[activePanel].TextColor3 = Color3.new(1, 1, 1)
+	end
+	for i, b in ipairs(ui.themeTabs or {}) do
+		b.BackgroundColor3 = (i == activeThemeIndex) and active or Color3.fromRGB(30, 30, 40)
+		b.TextColor3 = (i == activeThemeIndex) and Color3.new(1, 1, 1) or Color3.new(0.75, 0.75, 0.85)
+	end
+	if activePanel == "commands" and categoryButtons[activeCategory] then
+		categoryButtons[activeCategory].BackgroundColor3 = active
+		categoryButtons[activeCategory].TextColor3 = Color3.new(1, 1, 1)
+	end
+end
+
+local function showPanel(which)
+	activePanel = which
+	tools.Visible = which == "commands"
+	scroll.Visible = which == "commands"
+	feedPanel.Visible = which == "commands"
+	serverPanel.Visible = which == "server"
+	creditsPanel.Visible = which == "credits"
+	if which == "server" then refreshServerInfo() end
+	refreshTabVisuals()
+end
+
+local function filterCommands()
+	filterPending = false
+	for _, conn in ipairs(commandButtonConnections) do pcall(function() conn:Disconnect() end) end
+	commandButtonConnections = {}
+	for _, child in ipairs(scroll:GetChildren()) do
+		if child:IsA("TextButton") then child:Destroy() end
+	end
+	local terms = {}
+	for term in searchBox.Text:lower():gmatch("%S+") do table.insert(terms, term) end
+	local shown = {}
+	for _, entry in ipairs(commandOrder) do
+		local cat = categoryOf(entry.name)
+		local catOk = activeCategory == "All" or activeCategory == cat
+		local hay = entry.name:lower() .. " " .. tostring(entry.desc):lower()
+		local searchOk = #terms == 0
+		if not searchOk then
+			searchOk = true
+			for _, term in ipairs(terms) do
+				if not hay:find(term, 1, true) then searchOk = false; break end
+			end
+		end
+		if catOk and searchOk then table.insert(shown, entry) end
+	end
+	for i, entry in ipairs(shown) do
+		local col = (i - 1) % 3
+		local row = math.floor((i - 1) / 3)
+		local b = Instance.new("TextButton", scroll)
+		b.Size = UDim2.new(0, 225, 0, 42)
+		b.Position = UDim2.new(0, 10 + col * 235, 0, 10 + row * 50)
+		b.Text = "/" .. entry.name .. " — " .. entry.desc
+		b.TextXAlignment = Enum.TextXAlignment.Left
+		b.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
+		b.TextColor3 = Color3.new(0.9, 0.9, 0.95)
+		b.TextSize = 12
+		b.Font = Enum.Font.Gotham
+		b.BorderSizePixel = 0
+		corner(b, 10)
+		local baseSize = b.Size
+		hoverSize(b, baseSize, UDim2.new(0, 231, 0, 44), commandButtonConnections)
+		local clickConn = connect(b.MouseButton1Click, function()
+			tapSize(b, baseSize)
+			tapColor(b)
+			input.Text = "/" .. entry.name
+			input:CaptureFocus()
+		end)
+		table.insert(commandButtonConnections, clickConn)
+	end
+	local rows = math.ceil(#shown / 3)
+	scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(10 + rows * 50, 60))
+	scroll.CanvasPosition = Vector2.new(0, 0)
+end
+
+local refreshQuickToggles = function() end
+local function applyTheme(index)
+	activeThemeIndex = index
+	local t = themes[index]
+	main.BackgroundColor3 = t.bg
+	ui.badgeGrad.Color = ColorSequence.new(t.a, t.b)
+	ui.wordGrad.Color = ColorSequence.new(t.a, t.b)
+	ui.execGrad.Color = ColorSequence.new(t.a, t.b)
+	ui.bubbleGrad.Color = ColorSequence.new(t.a, t.b)
+	spotlightBtn.TextColor3 = t.b
+	themePill.Text = t.n:upper()
+	themeNote.Text = t.n .. " — gradient active"
+	for _, l in ipairs(ui.accentLabels or {}) do l.TextColor3 = t.b end
+	state.quickDirty = true
+	refreshTabVisuals()
+	refreshQuickToggles()
+end
+
+ui.themeTabs = {}
+tabButtons.server = makeTab("◈ SERVER", 120, function() showPanel("server") end)
+tabButtons.credits = makeTab("★ CREDITS", 120, function() showPanel("credits") end)
+tabButtons.commands = makeTab("⌘ COMMANDS", 130, function() showPanel("commands") end)
+for i, t in ipairs(themes) do
+	local b = makeTab(t.n, 88, function() applyTheme(i) end)
+	table.insert(ui.themeTabs, b)
+end
+
+for _, cat in ipairs({"All", "Movement", "Player", "Visual", "Combat", "System"}) do
+	local b = makeCategory(cat:upper(), function()
+		activeCategory = cat
+		showPanel("commands")
+		filterCommands()
+	end)
+	categoryButtons[cat] = b
+end
+
+local function executeCommand(text)
+	if not text then return end
+	local cleaned = text:match("^%s*(.-)%s*$")
+	if cleaned == "" then return end
+	local parts = {}
+	for token in cleaned:gmatch("%S+") do table.insert(parts, token) end
+	local name = parts[1]:gsub("^/", ""):lower()
+	local args = {}
+	for i = 2, #parts do args[i - 1] = parts[i] end
+	local cmd = commands[name]
+	if not cmd then
+		setStatus("Unknown command: " .. name)
+		pushLog("X /" .. name, false)
+		return
+	end
+	local ok, result = pcall(cmd.fn, args)
+	if not ok then
+		setStatus("Error: " .. tostring(result))
+		pushLog("X /" .. name .. " " .. tostring(result), false)
+	else
+		if type(result) == "string" then setStatus(result) end
+		pushLog("OK /" .. name, true)
+	end
+	refreshQuickToggles()
+	refreshStatChips()
+end
+
+local quickDock = Instance.new("Frame", side)
+quickDock.Size = UDim2.new(0, 218, 0, 28)
+quickDock.Position = UDim2.new(0, 16, 0, 290)
+quickDock.BackgroundTransparency = 1
+local quickButtons = {}
+local function makeQuick(text, x, onClick)
+	local b = Instance.new("TextButton", quickDock)
+	local baseSize = UDim2.new(0, 50, 0, 28)
+	b.Size = baseSize
+	b.Position = UDim2.new(0, x, 0, 0)
+	b.Text = text
+	b.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+	b.TextColor3 = Color3.new(0.65, 0.65, 0.75)
+	b.TextSize = 9
+	b.Font = Enum.Font.GothamBold
+	b.BorderSizePixel = 0
+	corner(b, 8)
+	outline(b, 0.9)
+	hoverSize(b, baseSize, UDim2.new(0, 52, 0, 30))
+	connect(b.MouseButton1Click, function()
+		tapSize(b, baseSize)
+		onClick()
+		tapColor(b)
+	end)
+	return b
+end
+quickButtons.fly = makeQuick("FLY", 0, function() executeCommand("fly") end)
+quickButtons.noclip = makeQuick("NCLP", 56, function() executeCommand("noclip") end)
+quickButtons.god = makeQuick("GOD", 112, function() executeCommand("god") end)
+quickButtons.esp = makeQuick("ESP", 168, function() executeCommand("esp") end)
+
+local lastQuickStates = {}
+refreshQuickToggles = function()
+	if state.quickDirty then
+		lastQuickStates = {}
+		state.quickDirty = false
+	end
+	local active = themes[activeThemeIndex or 1].a
+	local function paint(name, b, on)
+		if lastQuickStates[name] == on then return end
+		lastQuickStates[name] = on
+		b.BackgroundColor3 = on and active or Color3.fromRGB(32, 32, 42)
+		b.TextColor3 = on and Color3.new(1, 1, 1) or Color3.new(0.65, 0.65, 0.75)
+	end
+	paint("fly", quickButtons.fly, state.fly)
+	paint("noclip", quickButtons.noclip, state.noclip)
+	paint("god", quickButtons.god, state.god)
+	paint("esp", quickButtons.esp, state.esp)
+end
+refreshQuickToggles()
+
+local spotlightIndex = 1
+local currentSpotlightName = "fly"
+local function updateSpotlight()
+	local entry = commandOrder[spotlightIndex]
+	currentSpotlightName = entry.name
+	local desc = entry.desc or ""
+	if #desc > 22 then desc = desc:sub(1, 19) .. "..." end
+	spotlightBtn.Text = "SPOTLIGHT /" .. entry.name .. " — " .. desc
+	spotlightIndex = spotlightIndex % #commandOrder + 1
+end
+connect(spotlightBtn.MouseButton1Click, function()
+	tapSize(spotlightBtn, UDim2.new(0, 280, 0, 28))
+	tapColor(spotlightBtn)
+	input.Text = "/" .. currentSpotlightName
+	input:CaptureFocus()
+end)
+updateSpotlight()
+
+local footer = Instance.new("Frame", main)
+footer.Size = UDim2.new(1, 0, 0, 20)
+footer.Position = UDim2.new(0, 0, 1, -20)
+footer.BackgroundColor3 = Color3.fromRGB(10, 10, 16)
+footer.BorderSizePixel = 0
+local footerText = label(footer, "PYREX // 100 CMD // 02 THEMES // LIVE", UDim2.new(1, -16, 1, 0), UDim2.new(0, 8, 0, 0), 10, Color3.new(0.45, 0.45, 0.58), Enum.Font.GothamBold)
+footerText.TextXAlignment = Enum.TextXAlignment.Center
+
+connect(execBtn.MouseButton1Click, function()
+	tapSize(execBtn, execBtnBase)
+	tapColor(execBtn)
+	executeCommand(input.Text)
+end)
+connect(input.FocusLost, function(enterPressed)
+	if enterPressed then executeCommand(input.Text) end
+end)
+connect(searchBox:GetPropertyChangedSignal("Text"), function()
+	if activePanel == "commands" then filterPending = true end
+end)
+connect(RS.Heartbeat, function()
+	if not filterPending or activePanel ~= "commands" then return end
+	local now = os.clock()
+	if now < nextFilterTime then return end
+	filterPending = false
+	nextFilterTime = now + 0.08
+	filterCommands()
+end)
+
+local minimized = false
+local bubbleDragMoved = false
+local minimizeGen = 0
+local function minimizeToBubble()
+	minimizeGen = minimizeGen + 1
+	local gen = minimizeGen
+	local vx, vy = cam().ViewportSize.X, cam().ViewportSize.Y
+	local px = main.Position.X.Scale * vx + main.Position.X.Offset + 500 - 32
+	local py = main.Position.Y.Scale * vy + main.Position.Y.Offset + 320 - 32
+	bubble.Position = UDim2.new(0, math.clamp(px, 0, math.max(0, vx - 64)), 0, math.clamp(py, 0, math.max(0, vy - 64)))
+	main.Size = mainBase
+	main.BackgroundTransparency = 0
+	uiTween(main, {Size = UDim2.new(0, 940, 0, 600), BackgroundTransparency = 0.35}, 0.12, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 1, true)
+	bubble.Visible = true
+	bubble.Size = bubbleBase
+	uiTween(bubble, {Size = UDim2.new(0, 50, 0, 50)}, 0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out, 1, true)
+	task.delay(0.24, function()
+		if minimized and gen == minimizeGen then main.Visible = false end
+	end)
+	minimized = true
+	minBtn.Text = "+"
+end
+local function restoreFromBubble()
+	minimizeGen = minimizeGen + 1
+	local vx, vy = cam().ViewportSize.X, cam().ViewportSize.Y
+	local px = bubble.Position.X.Scale * vx + bubble.Position.X.Offset + 32 - 500
+	local py = bubble.Position.Y.Scale * vy + bubble.Position.Y.Offset + 32 - 320
+	main.Position = UDim2.new(0, math.clamp(px, 0, math.max(0, vx - 1000)), 0, math.clamp(py, 0, math.max(0, vy - 640)))
+	main.Visible = true
+	main.Size = UDim2.new(0, 950, 0, 608)
+	main.BackgroundTransparency = 0.3
+	uiTween(main, {Size = mainBase, BackgroundTransparency = 0}, 0.24, Enum.EasingStyle.Back)
+	bubble.Visible = false
+	minimized = false
+	minBtn.Text = "-"
+end
+connect(minBtn.MouseButton1Click, function()
+	tapSize(minBtn, minBtnBase)
+	tapColor(minBtn)
+	uiTween(minBtn, {Rotation = -10}, 0.1, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 1, true)
+	if minimized then restoreFromBubble() else minimizeToBubble() end
+end)
+connect(bubble.MouseButton1Click, function()
+	if not bubbleDragMoved then
+		tapSize(bubble, bubbleBase)
+		restoreFromBubble()
+	end
+end)
+connect(bubble.MouseButton2Click, function() cleanup() end)
+connect(closeBtn.MouseButton1Click, function()
+	tapSize(closeBtn, closeBtnBase)
+	tapColor(closeBtn)
+	uiTween(closeBtn, {Rotation = 12}, 0.1, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 1, true)
+	task.delay(0.11, cleanup)
+end)
+
+local dragging = false
+local dragTarget, dragStart, startPos
+local function beginDrag(inp, target)
+	if dragging then return end
+	dragging = true
+	dragTarget = target
+	dragStart = inp.Position
+	startPos = target.Position
+	bubbleDragMoved = false
+end
+local function stopDrag()
+	dragging = false
+	dragTarget = nil
+end
+connect(top.InputBegan, function(inp)
+	if inp.Target and inp.Target:IsA("GuiButton") then return end
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+		beginDrag(inp, main)
+	end
+end)
+connect(bubble.InputBegan, function(inp)
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+		beginDrag(inp, bubble)
+	end
+end)
+connect(UIS.InputChanged, function(inp)
+	if not dragging then return end
+	if inp.UserInputType ~= Enum.UserInputType.MouseMovement and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+	local delta = inp.Position - dragStart
+	bubbleDragMoved = bubbleDragMoved or delta.Magnitude > 3
+	local vx, vy = cam().ViewportSize.X, cam().ViewportSize.Y
+	if dragTarget == bubble then
+		local size = bubble.AbsoluteSize.X > 0 and bubble.AbsoluteSize.X or 64
+		bubble.Position = UDim2.new(0, math.clamp(startPos.X.Offset + delta.X, 0, math.max(0, vx - size)), 0, math.clamp(startPos.Y.Offset + delta.Y, 0, math.max(0, vy - size)))
+	else
+		local px = startPos.X.Scale * vx + startPos.X.Offset + delta.X
+		local py = startPos.Y.Scale * vy + startPos.Y.Offset + delta.Y
+		main.Position = UDim2.new(0, math.clamp(px, 0, math.max(0, vx - mainBase.X.Offset)), 0, math.clamp(py, 0, math.max(0, vy - mainBase.Y.Offset)))
+	end
+end)
+connect(UIS.InputEnded, function(inp)
+	if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+		if inp.UserInputState == Enum.UserInputState.End or inp.UserInputState == Enum.UserInputState.Cancel then
+			stopDrag()
+		end
+	end
+end)
+
+local lastServerRefresh = 0
+local lastSpotlightRefresh = 0
+local lastStatRefresh = 0
+connect(RS.Heartbeat, function()
+	local now = os.clock()
+	if now - lastStatRefresh > 1 then
+		lastStatRefresh = now
+		refreshStatChips()
+	end
+	if activePanel == "server" and now - lastServerRefresh > 1 then
+		lastServerRefresh = now
+		refreshServerInfo()
+	end
+	if now - lastSpotlightRefresh > 4 then
+		lastSpotlightRefresh = now
+		updateSpotlight()
+	end
+	if statusLabel and statusLabel.Parent then
+		footerText.Text = "PYREX // 100 CMD // 02 THEMES // " .. (statusLabel.Text ~= "" and statusLabel.Text or "LIVE")
+	end
+end)
+
+applyTheme(1)
+showPanel("commands")
+filterCommands()
+print("[PYREX] boot ok — " .. #commandOrder .. " commands")
+setStatus("Ready - " .. #commandOrder .. " commands")
+pushLog("OK /ready", true)
+refreshStatChips()
+refreshQuickToggles()
